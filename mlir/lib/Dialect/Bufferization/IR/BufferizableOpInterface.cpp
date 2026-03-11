@@ -364,6 +364,15 @@ defaultUnknownTypeConverter(TensorType tensorType, Attribute memorySpace,
   return getMemRefTypeWithFullyDynamicLayout(tensorType, memorySpace);
 }
 
+FailureOr<BufferLikeType>
+applyBufferTypePostprocess(Value value, BufferLikeType bufferType,
+                           const BufferizationOptions &options,
+                           const BufferizationState &state) {
+  if (!options.bufferTypePostprocessFn)
+    return bufferType;
+  return options.bufferTypePostprocessFn(value, bufferType, options, state);
+}
+
 } // namespace
 
 // Default constructor for BufferizationOptions.
@@ -729,13 +738,22 @@ bufferization::getBufferType(Value value, const BufferizationOptions &options,
   // Try querying BufferizableOpInterface.
   Operation *op = getOwnerOfValue(value);
   auto bufferizableOp = options.dynCastBufferizableOp(op);
-  if (bufferizableOp)
-    return bufferizableOp.getBufferType(value, options, state, invocationStack);
+  if (bufferizableOp) {
+    FailureOr<BufferLikeType> bufferType =
+        bufferizableOp.getBufferType(value, options, state, invocationStack);
+    if (failed(bufferType))
+      return failure();
+    return applyBufferTypePostprocess(value, *bufferType, options, state);
+  }
 
   // Op is not bufferizable.
-  return cast<TensorLikeType>(value.getType()).getBufferType(options, [&]() {
-    return op->emitError();
-  });
+  FailureOr<BufferLikeType> bufferType =
+      cast<TensorLikeType>(value.getType()).getBufferType(options, [&]() {
+        return op->emitError();
+      });
+  if (failed(bufferType))
+    return failure();
+  return applyBufferTypePostprocess(value, *bufferType, options, state);
 }
 
 bool bufferization::hasTensorSemantics(Operation *op) {

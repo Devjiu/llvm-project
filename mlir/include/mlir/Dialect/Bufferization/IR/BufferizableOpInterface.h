@@ -28,6 +28,7 @@ class FuncOp;
 namespace bufferization {
 
 class AnalysisState;
+class BufferizationState;
 class BufferizableOpInterface;
 
 /// Specifies a fine-grain relationship between buffers to enable more analysis.
@@ -269,9 +270,17 @@ struct BufferizationOptions {
   /// Parameters: tensor type, memory space, bufferization options
   using UnknownTypeConverterFn = std::function<BaseMemRefType(
       TensorType, Attribute memorySpace, const BufferizationOptions &)>;
+  /// Final postprocessing hook for buffer types produced by op interfaces or
+  /// fallback tensor-like conversions.
+  using BufferTypePostprocessFn = std::function<FailureOr<BufferLikeType>(
+      Value, BufferLikeType, const BufferizationOptions &,
+      const BufferizationState &)>;
   // Produce a MemorySpace attribute from a tensor type
   using DefaultMemorySpaceFn =
       std::function<std::optional<Attribute>(TensorType t)>;
+  /// Construct a MemRefLayoutAttrInterface from a tensor type.
+  using ConstructMemRefLayoutFn =
+      std::function<MemRefLayoutAttrInterface(TensorType t)>;
 
   BufferizationOptions();
 
@@ -357,12 +366,18 @@ struct BufferizationOptions {
   /// a memref type with a fully dynamic layout map.
   UnknownTypeConverterFn unknownTypeConverterFn = nullptr;
 
+  /// Optional postprocessing of buffer types returned by `getBufferType`.
+  /// This hook runs after op-specific and fallback type inference.
+  BufferTypePostprocessFn bufferTypePostprocessFn = nullptr;
+
   // Use during type conversion to determine the memory space for memref based
   // on the original tensor type if the memory space cannot be inferred.
   // Returning std::nullopt will cause bufferization to fail (useful to indicate
   // failure to determine memory space for a tensor type).
   DefaultMemorySpaceFn defaultMemorySpaceFn =
       [](TensorType t) -> std::optional<Attribute> { return Attribute(); };
+
+  ConstructMemRefLayoutFn constructMemRefLayoutFn = nullptr;
 
   /// If set to `true`, the analysis is skipped. A buffer is copied before every
   /// write. This flag cannot be used together with `testAnalysisOnly = true`.
