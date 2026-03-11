@@ -2768,6 +2768,8 @@ MemRefType SubViewOp::inferRankReducedResultType(
     if (!dimsToProject->contains(idx))
       rankReducedStrides.push_back(value);
   }
+  // Theoretiaclly there should be also passed options to handle original
+  // encodings of output tensor
   return MemRefType::get(resultShape, inferredType.getElementType(),
                          StridedLayoutAttr::get(inferredLayout.getContext(),
                                                 inferredLayout.getOffset(),

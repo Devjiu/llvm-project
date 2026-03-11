@@ -520,6 +520,72 @@ getBbArgReplacements(RewriterBase &rewriter, Block::BlockArgListType bbArgs,
   return result;
 }
 
+static FailureOr<BufferLikeType>
+mergeLoopIterArgMemRefTypes(Operation *loopOp, BufferLikeType initType,
+                            BufferLikeType yieldType) {
+
+  auto initMemRef = dyn_cast<MemRefType>(initType);
+  auto yieldMemRef = dyn_cast<MemRefType>(yieldType);
+  if (!initMemRef || !yieldMemRef)
+    return failure();
+
+  if (initMemRef.getElementType() != yieldMemRef.getElementType() ||
+      initMemRef.getRank() != yieldMemRef.getRank() ||
+      initMemRef.getShape() != yieldMemRef.getShape()) {
+    return loopOp->emitOpError(
+        "incompatible iter_arg buffer element/rank/shape");
+  }
+
+  if (initMemRef.getMemorySpace() != yieldMemRef.getMemorySpace()) {
+    return loopOp->emitOpError(
+        "init_arg and yielded value bufferize to inconsistent memory spaces");
+  }
+
+  if (memref::CastOp::areCastCompatible(initMemRef, yieldMemRef) &&
+      memref::CastOp::areCastCompatible(yieldMemRef, initMemRef)) {
+    return cast<BufferLikeType>(initMemRef);
+  }
+
+  SmallVector<int64_t> strA, strB;
+  int64_t offA = ShapedType::kDynamic;
+  int64_t offB = ShapedType::kDynamic;
+  auto initLayout =
+      dyn_cast_or_null<MemRefLayoutAttrInterface>(initMemRef.getLayout());
+  auto yieldLayout =
+      dyn_cast_or_null<MemRefLayoutAttrInterface>(yieldMemRef.getLayout());
+
+  LogicalResult okA = failure();
+  LogicalResult okB = failure();
+
+  if (initLayout)
+    okA = initLayout.getStridesAndOffset(initMemRef.getShape(), strA, offA);
+  if (yieldLayout)
+    okB = yieldLayout.getStridesAndOffset(yieldMemRef.getShape(), strB, offB);
+
+  if (failed(okA))
+    okA = initMemRef.getStridesAndOffset(strA, offA);
+  if (failed(okB))
+    okB = yieldMemRef.getStridesAndOffset(strB, offB);
+
+  if (failed(okA) || failed(okB) || strA.size() != strB.size())
+    return failure();
+
+  MemRefLayoutAttrInterface mergedLayout = nullptr;
+  if (initLayout == yieldLayout)
+    mergedLayout = initLayout;
+
+  if (!yieldLayout || !initLayout) {
+    mergedLayout = yieldLayout ? yieldLayout : initLayout;
+  }
+  if (!mergedLayout) {
+    return loopOp->emitOpError("init_arg and yielded value bufferize to "
+                               "inconsistent layouts, cant merge");
+  }
+  return cast<BufferLikeType>(
+      MemRefType::get(initMemRef.getShape(), initMemRef.getElementType(),
+                      mergedLayout, initMemRef.getMemorySpace()));
+}
+
 /// Compute the bufferized type of a loop iter_arg. This type must be equal to
 /// the bufferized type of the corresponding init_arg and the bufferized type
 /// of the corresponding yielded value.
@@ -575,28 +641,49 @@ static FailureOr<BufferLikeType> computeLoopRegionIterArgBufferType(
   if (*initArgBufferType == yieldedValueBufferType)
     return yieldedValueBufferType;
 
-  // If there is a mismatch between the yielded buffer type and the init_arg
-  // buffer type, the buffer type must be promoted to a fully dynamic layout
-  // map.
-  auto yieldedBufferType = cast<BaseMemRefType>(yieldedValueBufferType);
+  if (auto mergedType = mergeLoopIterArgMemRefTypes(loopOp, *initArgBufferType,
+                                                    yieldedValueBufferType);
+      succeeded(mergedType)) {
+    return *mergedType;
+  }
+
   auto iterTensorType = cast<TensorType>(iterArg.getType());
-  auto initBufferType = llvm::cast<BaseMemRefType>(*initArgBufferType);
-  if (initBufferType.getMemorySpace() != yieldedBufferType.getMemorySpace())
+  Attribute memorySpace = nullptr;
+  auto initBaseMemRefType = dyn_cast<BaseMemRefType>(*initArgBufferType);
+  auto yieldedBaseMemRefType = dyn_cast<BaseMemRefType>(yieldedValueBufferType);
+  if (initBaseMemRefType)
+    memorySpace = initBaseMemRefType.getMemorySpace();
+
+  if (initBaseMemRefType && yieldedBaseMemRefType &&
+      initBaseMemRefType.getMemorySpace() !=
+          yieldedBaseMemRefType.getMemorySpace()) {
     return loopOp->emitOpError(
         "init_arg and yielded value bufferize to inconsistent memory spaces");
+  }
+
 #ifndef NDEBUG
-  if (auto yieldedRankedBufferType = dyn_cast<MemRefType>(yieldedBufferType)) {
-    assert(
-        llvm::all_equal({yieldedRankedBufferType.getShape(),
-                         cast<MemRefType>(initBufferType).getShape(),
-                         cast<RankedTensorType>(iterTensorType).getShape()}) &&
-        "expected same shape");
+  if (auto yieldedRankedBufferType =
+          dyn_cast<MemRefType>(yieldedValueBufferType)) {
+    if (auto initRankedBufferType = dyn_cast<MemRefType>(*initArgBufferType)) {
+      if (auto rankedTensorType = dyn_cast<RankedTensorType>(iterTensorType)) {
+        assert(llvm::all_equal({yieldedRankedBufferType.getShape(),
+                                initRankedBufferType.getShape(),
+                                rankedTensorType.getShape()}) &&
+               "expected same shape");
+      }
+    }
   }
 #endif // NDEBUG
+  if (options.constructMemRefLayoutFn) {
+    if (auto layout = options.constructMemRefLayoutFn(iterTensorType)) {
+      return cast<BufferLikeType>(bufferization::getMemRefType(
+          iterTensorType, options, layout, memorySpace));
+    }
+  }
   // TODO: Properly support with options, for now it is hardcoded MemRef type
   // based approach
   return cast<BufferLikeType>(getMemRefTypeWithFullyDynamicLayout(
-      iterTensorType, yieldedBufferType.getMemorySpace()));
+      iterTensorType, memorySpace));
 }
 
 /// Return `true` if the given loop may have 0 iterations.
