@@ -287,7 +287,7 @@ def BufferizableOpInterface : OpInterface<"BufferizableOpInterface"> {
         /*methodBody=*/"",
         /*defaultImplementation=*/[{
           // Does not have to be implemented for ops without tensor OpOperands.
-          assert(::llvm::isa<::mlir::TensorLikeType>(opOperand.get().getType()) &&
+          assert(::llvm::isa<::mlir::bufferization::TensorLikeType>(opOperand.get().getType()) &&
                  "expected OpOperand with tensor like type");
           llvm_unreachable("getAliasingValues not implemented");
         }]
@@ -358,7 +358,7 @@ def BufferizableOpInterface : OpInterface<"BufferizableOpInterface"> {
                       "const ::mlir::bufferization::AnalysisState &":$state),
         /*methodBody=*/"",
         /*defaultImplementation=*/[{
-          assert(isa<::mlir::TensorLikeType>(value.getType()) &&
+          assert(isa<::mlir::bufferization::TensorLikeType>(value.getType()) &&
                  "expected tensor like type");
           return ::mlir::bufferization::detail::defaultGetAliasingOpOperands(
               value, state);
