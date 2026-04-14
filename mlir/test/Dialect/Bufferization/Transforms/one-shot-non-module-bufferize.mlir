@@ -67,3 +67,116 @@
   }
   "test.finish" () : () -> ()
 }) : () -> ()
+
+// -----
+
+#enc_stride_2d = #test.tensor_encoding<strides = [17, 3], offset = 5>
+
+"test.symbol_scope_isolated"() ({
+  func.func private @builtin_encoding_identity_2d(
+      %arg: tensor<4x4xf64, #enc_stride_2d>)
+      -> tensor<4x4xf64, #enc_stride_2d> {
+    return %arg : tensor<4x4xf64, #enc_stride_2d>
+  }
+
+  // CHECK-LABEL: func.func @builtin_encoding_scf_for_inplace_with_call(
+  // CHECK-SAME: %[[arg:.+]]: memref<4x4xf64, #test.memref_layout<strides = [17, 3], offset = 5>>
+  // CHECK-SAME: %[[lb:.+]]: index, %[[ub:.+]]: index, %[[step:.+]]: index
+  // CHECK-SAME: ) -> memref<4x4xf64, #test.memref_layout<strides = [17, 3], offset = 5>>
+  // CHECK: %[[loop:.+]] = scf.for %{{.*}} = %[[lb]] to %[[ub]] step %[[step]] iter_args(%[[iter:.+]] = %[[arg]]) -> (memref<4x4xf64, #test.memref_layout<strides = [17, 3], offset = 5>>) {
+  // CHECK: %[[call:.+]] = func.call @builtin_encoding_identity_2d(%[[iter]]) : (memref<4x4xf64, #test.memref_layout<strides = [17, 3], offset = 5>>) -> memref<4x4xf64, #test.memref_layout<strides = [17, 3], offset = 5>>
+  // CHECK: scf.yield %[[call]] : memref<4x4xf64, #test.memref_layout<strides = [17, 3], offset = 5>>
+  // CHECK: return %[[loop]] : memref<4x4xf64, #test.memref_layout<strides = [17, 3], offset = 5>>
+  func.func @builtin_encoding_scf_for_inplace_with_call(
+      %arg: tensor<4x4xf64, #enc_stride_2d>,
+      %lb: index, %ub: index, %step: index)
+      -> tensor<4x4xf64, #enc_stride_2d> {
+    %loop = scf.for %i = %lb to %ub step %step
+        iter_args(%iter = %arg) -> (tensor<4x4xf64, #enc_stride_2d>) {
+      %call = func.call @builtin_encoding_identity_2d(%iter)
+        : (tensor<4x4xf64, #enc_stride_2d>) -> tensor<4x4xf64, #enc_stride_2d>
+      scf.yield %call : tensor<4x4xf64, #enc_stride_2d>
+    }
+    return %loop : tensor<4x4xf64, #enc_stride_2d>
+  }
+  "test.finish" () : () -> ()
+}) : () -> ()
+
+// -----
+
+#enc_stride_2d = #test.tensor_encoding<strides = [17, 3], offset = 5>
+
+"test.symbol_scope_isolated"() ({
+  func.func private @builtin_encoding_identity_2d(
+      %arg: tensor<4x4xf64, #enc_stride_2d>)
+      -> tensor<4x4xf64, #enc_stride_2d> {
+    return %arg : tensor<4x4xf64, #enc_stride_2d>
+  }
+
+  // CHECK-LABEL: func.func @builtin_encoding_scf_if_inplace_with_call(
+  // CHECK-SAME: %[[arg:.+]]: memref<4x4xf64, #test.memref_layout<strides = [17, 3], offset = 5>>
+  // CHECK-SAME: %[[cond:.+]]: i1
+  // CHECK-SAME: ) -> memref<4x4xf64, #test.memref_layout<strides = [17, 3], offset = 5>>
+  // CHECK: %[[res:.+]] = scf.if %[[cond]] -> (memref<4x4xf64, #test.memref_layout<strides = [17, 3], offset = 5>>) {
+  // CHECK: %[[call:.+]] = func.call @builtin_encoding_identity_2d(%[[arg]]) : (memref<4x4xf64, #test.memref_layout<strides = [17, 3], offset = 5>>) -> memref<4x4xf64, #test.memref_layout<strides = [17, 3], offset = 5>>
+  // CHECK: scf.yield %[[call]] : memref<4x4xf64, #test.memref_layout<strides = [17, 3], offset = 5>>
+  // CHECK: } else {
+  // CHECK: scf.yield %[[arg]] : memref<4x4xf64, #test.memref_layout<strides = [17, 3], offset = 5>>
+  // CHECK: }
+  // CHECK: return %[[res]] : memref<4x4xf64, #test.memref_layout<strides = [17, 3], offset = 5>>
+  func.func @builtin_encoding_scf_if_inplace_with_call(
+      %arg: tensor<4x4xf64, #enc_stride_2d>,
+      %cond: i1)
+      -> tensor<4x4xf64, #enc_stride_2d> {
+    %res = scf.if %cond -> (tensor<4x4xf64, #enc_stride_2d>) {
+      %call = func.call @builtin_encoding_identity_2d(%arg)
+        : (tensor<4x4xf64, #enc_stride_2d>) -> tensor<4x4xf64, #enc_stride_2d>
+      scf.yield %call : tensor<4x4xf64, #enc_stride_2d>
+    } else {
+      scf.yield %arg : tensor<4x4xf64, #enc_stride_2d>
+    }
+    return %res : tensor<4x4xf64, #enc_stride_2d>
+  }
+  "test.finish" () : () -> ()
+}) : () -> ()
+
+// -----
+
+#enc_stride_2d = #test.tensor_encoding<strides = [17, 3], offset = 5>
+
+"test.symbol_scope_isolated"() ({
+  func.func private @builtin_encoding_identity_2d(
+      %arg: tensor<4x4xf64, #enc_stride_2d>)
+      -> tensor<4x4xf64, #enc_stride_2d> {
+    return %arg : tensor<4x4xf64, #enc_stride_2d>
+  }
+
+  // CHECK-LABEL: func.func @builtin_encoding_scf_while_inplace_with_call(
+  // CHECK-SAME: %[[arg:.+]]: memref<4x4xf64, #test.memref_layout<strides = [17, 3], offset = 5>>
+  // CHECK-SAME: %[[cond:.+]]: i1
+  // CHECK-SAME: ) -> memref<4x4xf64, #test.memref_layout<strides = [17, 3], offset = 5>>
+  // CHECK: %[[loop:.+]] = scf.while (%[[iter:.+]] = %[[arg]]) : (memref<4x4xf64, #test.memref_layout<strides = [17, 3], offset = 5>>) -> memref<4x4xf64, #test.memref_layout<strides = [17, 3], offset = 5>> {
+  // CHECK: scf.condition(%[[cond]]) %[[iter]] : memref<4x4xf64, #test.memref_layout<strides = [17, 3], offset = 5>>
+  // CHECK: } do {
+  // CHECK: ^bb0(%[[current:.+]]: memref<4x4xf64, #test.memref_layout<strides = [17, 3], offset = 5>>):
+  // CHECK: %[[call:.+]] = func.call @builtin_encoding_identity_2d(%[[current]]) : (memref<4x4xf64, #test.memref_layout<strides = [17, 3], offset = 5>>) -> memref<4x4xf64, #test.memref_layout<strides = [17, 3], offset = 5>>
+  // CHECK: scf.yield %[[call]] : memref<4x4xf64, #test.memref_layout<strides = [17, 3], offset = 5>>
+  // CHECK: }
+  // CHECK: return %[[loop]] : memref<4x4xf64, #test.memref_layout<strides = [17, 3], offset = 5>>
+  func.func @builtin_encoding_scf_while_inplace_with_call(
+      %arg: tensor<4x4xf64, #enc_stride_2d>,
+      %cond: i1)
+      -> tensor<4x4xf64, #enc_stride_2d> {
+    %loop = scf.while (%iter = %arg)
+        : (tensor<4x4xf64, #enc_stride_2d>) -> tensor<4x4xf64, #enc_stride_2d> {
+      scf.condition(%cond) %iter : tensor<4x4xf64, #enc_stride_2d>
+    } do {
+    ^bb0(%current: tensor<4x4xf64, #enc_stride_2d>):
+      %call = func.call @builtin_encoding_identity_2d(%current)
+        : (tensor<4x4xf64, #enc_stride_2d>) -> tensor<4x4xf64, #enc_stride_2d>
+      scf.yield %call : tensor<4x4xf64, #enc_stride_2d>
+    }
+    return %loop : tensor<4x4xf64, #enc_stride_2d>
+  }
+  "test.finish" () : () -> ()
+}) : () -> ()

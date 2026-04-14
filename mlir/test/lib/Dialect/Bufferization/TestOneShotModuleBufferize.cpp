@@ -25,7 +25,8 @@ getMemRefLayoutForTensorEncoding(RankedTensorType tensorType) {
   if (auto encoding = dyn_cast_if_present<test::TestTensorEncodingAttr>(
           tensorType.getEncoding())) {
     return cast<MemRefLayoutAttrInterface>(test::TestMemRefLayoutAttr::get(
-        tensorType.getContext(), encoding.getDummy()));
+  tensorType.getContext(), encoding.getStrides(), encoding.getOffset(),
+  encoding.getDummy()));
   }
   return {};
 }

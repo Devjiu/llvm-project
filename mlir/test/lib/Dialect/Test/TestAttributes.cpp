@@ -160,6 +160,23 @@ static FailureOr<SmallVector<int>> parseIntArray(AsmParser &parser) {
   return ints;
 }
 
+static FailureOr<SmallVector<int64_t>> parseInt64Array(AsmParser &parser) {
+  SmallVector<int64_t> ints;
+  if (parser.parseLSquare() || parser.parseCommaSeparatedList([&]() {
+        ints.push_back(0);
+        return parser.parseInteger(ints.back());
+      }) ||
+      parser.parseRSquare())
+    return failure();
+  return ints;
+}
+
+static void printInt64Array(AsmPrinter &printer, ArrayRef<int64_t> ints) {
+  printer << '[';
+  llvm::interleaveComma(ints, printer);
+  printer << ']';
+}
+
 static void printIntArray(AsmPrinter &printer, ArrayRef<int> ints) {
   printer << '[';
   llvm::interleaveComma(ints, printer);
@@ -588,6 +605,91 @@ test::detail::TestCustomStorageCtorAttrAttrStorage::construct(
 // TestTensorEncodingAttr
 //===----------------------------------------------------------------------===//
 
+Attribute TestTensorEncodingAttr::parse(AsmParser &parser, Type type) {
+  if (parser.parseLess())
+    return Attribute();
+
+  // Legacy form: #test.tensor_encoding<"hello">
+  StringAttr dummy;
+  OptionalParseResult parsedDummy = parser.parseOptionalAttribute(dummy);
+  if (parsedDummy.has_value()) {
+    if (failed(*parsedDummy) || parser.parseGreater())
+      return Attribute();
+    return get(parser.getContext(), /*strides=*/{}, /*offset=*/std::nullopt,
+               dummy);
+  }
+
+  SmallVector<int64_t> strides;
+  std::optional<int64_t> offset;
+
+  bool needComma = false;
+  while (succeeded(parser.parseOptionalGreater()) == false) {
+    if (needComma && parser.parseComma())
+      return Attribute();
+    needComma = true;
+
+    StringRef key;
+    if (parser.parseKeyword(&key) || parser.parseEqual())
+      return Attribute();
+
+    if (key == "strides") {
+      auto maybeStrides = parseInt64Array(parser);
+      if (failed(maybeStrides))
+        return Attribute();
+      strides.assign(maybeStrides->begin(), maybeStrides->end());
+      continue;
+    }
+
+    if (key == "offset") {
+      int64_t parsedOffset = 0;
+      if (parser.parseInteger(parsedOffset))
+        return Attribute();
+      offset = parsedOffset;
+      continue;
+    }
+
+    if (key == "dummy") {
+      if (parser.parseAttribute(dummy))
+        return Attribute();
+      continue;
+    }
+
+    parser.emitError(parser.getCurrentLocation())
+        << "unknown key in test.tensor_encoding: " << key;
+    return Attribute();
+  }
+
+  return get(parser.getContext(), strides, offset, dummy);
+}
+
+void TestTensorEncodingAttr::print(AsmPrinter &printer) const {
+  printer << "<";
+  if (getDummy() && getStrides().empty() && !getOffset()) {
+    printer << getDummy();
+    printer << ">";
+    return;
+  }
+
+  bool needComma = false;
+  if (!getStrides().empty()) {
+    printer << "strides = ";
+    printInt64Array(printer, getStrides());
+    needComma = true;
+  }
+  if (getOffset()) {
+    if (needComma)
+      printer << ", ";
+    printer << "offset = " << *getOffset();
+    needComma = true;
+  }
+  if (getDummy()) {
+    if (needComma)
+      printer << ", ";
+    printer << "dummy = " << getDummy();
+  }
+  printer << ">";
+}
+
 ::llvm::LogicalResult TestTensorEncodingAttr::verifyEncoding(
     mlir::ArrayRef<int64_t> shape, mlir::Type elementType,
     llvm::function_ref<::mlir::InFlightDiagnostic()> emitError) const {
@@ -598,7 +700,152 @@ test::detail::TestCustomStorageCtorAttrAttrStorage::construct(
 // TestMemRefLayoutAttr
 //===----------------------------------------------------------------------===//
 
+Attribute TestMemRefLayoutAttr::parse(AsmParser &parser, Type type) {
+  if (parser.parseLess())
+    return Attribute();
+
+  // Legacy form: #test.memref_layout<"hello">
+  StringAttr dummy;
+  OptionalParseResult parsedDummy = parser.parseOptionalAttribute(dummy);
+  if (parsedDummy.has_value()) {
+    if (failed(*parsedDummy) || parser.parseGreater())
+      return Attribute();
+    return get(parser.getContext(), /*strides=*/{}, /*offset=*/std::nullopt,
+               dummy);
+  }
+
+  SmallVector<int64_t> strides;
+  std::optional<int64_t> offset;
+
+  bool needComma = false;
+  while (succeeded(parser.parseOptionalGreater()) == false) {
+    if (needComma && parser.parseComma())
+      return Attribute();
+    needComma = true;
+
+    StringRef key;
+    if (parser.parseKeyword(&key) || parser.parseEqual())
+      return Attribute();
+
+    if (key == "strides") {
+      auto maybeStrides = parseInt64Array(parser);
+      if (failed(maybeStrides))
+        return Attribute();
+      strides.assign(maybeStrides->begin(), maybeStrides->end());
+      continue;
+    }
+
+    if (key == "offset") {
+      int64_t parsedOffset = 0;
+      if (parser.parseInteger(parsedOffset))
+        return Attribute();
+      offset = parsedOffset;
+      continue;
+    }
+
+    if (key == "dummy") {
+      if (parser.parseAttribute(dummy))
+        return Attribute();
+      continue;
+    }
+
+    parser.emitError(parser.getCurrentLocation())
+        << "unknown key in test.memref_layout: " << key;
+    return Attribute();
+  }
+
+  return get(parser.getContext(), strides, offset, dummy);
+}
+
+void TestMemRefLayoutAttr::print(AsmPrinter &printer) const {
+  printer << "<";
+  if (getDummy() && getStrides().empty() && !getOffset()) {
+    printer << getDummy();
+    printer << ">";
+    return;
+  }
+
+  bool needComma = false;
+  if (!getStrides().empty()) {
+    printer << "strides = ";
+    printInt64Array(printer, getStrides());
+    needComma = true;
+  }
+  if (getOffset()) {
+    if (needComma)
+      printer << ", ";
+    printer << "offset = " << *getOffset();
+    needComma = true;
+  }
+  if (getDummy()) {
+    if (needComma)
+      printer << ", ";
+    printer << "dummy = " << getDummy();
+  }
+  printer << ">";
+}
+
+static FailureOr<SmallVector<int64_t>> parseInt64List(StringRef input) {
+  SmallVector<int64_t> values;
+  SmallVector<StringRef> tokens;
+  input.split(tokens, ',', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+  for (StringRef token : tokens) {
+    token = token.trim();
+    int64_t parsed = 0;
+    if (token.empty() || token.getAsInteger(10, parsed))
+      return failure();
+    values.push_back(parsed);
+  }
+  return values;
+}
+
+static FailureOr<std::pair<SmallVector<int64_t>, int64_t>>
+parseStridesAndOffset(StringRef payload) {
+  StringRef s = payload.trim();
+  if (!s.consume_front("strides=["))
+    return failure();
+
+  size_t closing = s.find(']');
+  if (closing == StringRef::npos)
+    return failure();
+
+  StringRef stridesPart = s.take_front(closing);
+  auto maybeStrides = parseInt64List(stridesPart);
+  if (failed(maybeStrides) || maybeStrides->empty())
+    return failure();
+
+  s = s.drop_front(closing + 1).trim();
+  int64_t offset = 0;
+  if (!s.empty()) {
+    if (!s.consume_front(","))
+      return failure();
+    s = s.trim();
+    if (!s.consume_front("offset="))
+      return failure();
+    s = s.trim();
+    if (s.getAsInteger(10, offset))
+      return failure();
+  }
+
+  return std::make_pair(*maybeStrides, offset);
+}
+
 mlir::AffineMap TestMemRefLayoutAttr::getAffineMap() const {
+  if (!getStrides().empty()) {
+    int64_t offset = getOffset().value_or(0);
+    return mlir::makeStridedLinearLayoutMap(getStrides(), offset,
+                                            getContext());
+  }
+
+  if (getDummy()) {
+    StringRef payload = getDummy().getValue();
+    auto maybeLayout = parseStridesAndOffset(payload);
+    if (succeeded(maybeLayout))
+      return mlir::makeStridedLinearLayoutMap(maybeLayout->first,
+                                              maybeLayout->second,
+                                              getContext());
+  }
+
   return mlir::AffineMap::getMultiDimIdentityMap(1, getContext());
 }
 
