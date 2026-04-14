@@ -1733,7 +1733,8 @@ getMemRefLayoutForTensorEncoding(RankedTensorType tensorType) {
   if (auto encoding =
           dyn_cast<test::TestTensorEncodingAttr>(tensorType.getEncoding())) {
     return cast<MemRefLayoutAttrInterface>(test::TestMemRefLayoutAttr::get(
-        tensorType.getContext(), encoding.getDummy()));
+  tensorType.getContext(), encoding.getStrides(), encoding.getOffset(),
+  encoding.getDummy()));
   }
   return {};
 }

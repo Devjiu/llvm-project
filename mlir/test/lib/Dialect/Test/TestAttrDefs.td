@@ -486,16 +486,20 @@ def TestTensorEncodingAttr : Test_Attr<"TestTensorEncoding",
     [DeclareAttrInterfaceMethods<VerifiableTensorEncoding>]> {
   let mnemonic = "tensor_encoding";
 
-  let parameters = (ins "mlir::StringAttr":$dummy);
-  let assemblyFormat = "`<` $dummy `>`";
+  let parameters = (ins OptionalArrayRefParameter<"int64_t">:$strides,
+                        OptionalParameter<"std::optional<int64_t>">:$offset,
+                        OptionalParameter<"mlir::StringAttr">:$dummy);
+  let hasCustomAssemblyFormat = 1;
 }
 
 def TestMemRefLayoutAttr : Test_Attr<"TestMemRefLayout",
     [DeclareAttrInterfaceMethods<MemRefLayoutAttrInterface>]> {
   let mnemonic = "memref_layout";
 
-  let parameters = (ins "mlir::StringAttr":$dummy);
-  let assemblyFormat = "`<` $dummy `>`";
+  let parameters = (ins OptionalArrayRefParameter<"int64_t">:$strides,
+                        OptionalParameter<"std::optional<int64_t>">:$offset,
+                        OptionalParameter<"mlir::StringAttr">:$dummy);
+  let hasCustomAssemblyFormat = 1;
 }
 
 // Test attribute that implements SymbolUserAttrInterface.
