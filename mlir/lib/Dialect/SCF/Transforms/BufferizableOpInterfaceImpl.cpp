@@ -65,6 +65,13 @@ static Value castBuffer(OpBuilder &b, Value buffer, Type type) {
   // TODO: In case `type` has a layout map that is not the fully dynamic
   // one, we may not be able to cast the buffer. In that case, the loop
   // iter_arg's layout map must be changed (see uses of `castBuffer`).
+  // TODO: memref::CastOp::areCastCompatible only knows about the built-in
+  // strided layout. When a custom `BufferLikeType` (or a non-strided layout
+  // attribute, e.g. produced via `tensorEncodingToMemRefLayoutFn` +
+  // `reconcileBufferTypeMismatchFn`) is used, this assertion can spuriously
+  // fail even though the downstream dialect would accept the cast. Teach
+  // `castBuffer` to consult a pluggable "cast compatible" hook from
+  // `BufferizationOptions` so downstream buffer types can participate.
   assert(memref::CastOp::areCastCompatible(buffer.getType(), type) &&
          "scf.while op bufferization: cast incompatible");
   return memref::CastOp::create(b, buffer.getLoc(), type, buffer).getResult();
