@@ -29,6 +29,28 @@ namespace mlir {
 namespace scf {
 namespace {
 
+/// Dispatch to `options.reconcileBufferTypeMismatchFn` when set. Returns:
+///   * the hook's result when it succeeds with a concrete buffer type,
+///   * `failure()` when the hook explicitly fails,
+///   * `std::nullopt` when there is no hook or the hook asked for the default
+///     fallback (i.e. returned a null `BufferLikeType`).
+/// On `std::nullopt` the caller is expected to apply its existing fallback
+/// (typically fully-dynamic layout).
+static FailureOr<std::optional<BufferLikeType>> tryReconcileBufferType(
+    Operation *op, BufferizationOptions::BufferTypeMismatchKind kind,
+    BufferLikeType lhs, BufferLikeType rhs,
+    const BufferizationOptions &options) {
+  if (!options.reconcileBufferTypeMismatchFn)
+    return std::optional<BufferLikeType>{std::nullopt};
+  auto result = options.reconcileBufferTypeMismatchFn(op, kind, lhs, rhs,
+                                                      options);
+  if (failed(result))
+    return failure();
+  if (!*result)
+    return std::optional<BufferLikeType>{std::nullopt};
+  return std::optional<BufferLikeType>{*result};
+}
+
 /// Helper function for loop bufferization. Cast the given buffer to the given
 /// memref type.
 static Value castBuffer(OpBuilder &b, Value buffer, Type type) {
@@ -323,9 +345,17 @@ struct IfOpInterface
             elseBaseMemRefType.getMemorySpace())
       return op->emitError("inconsistent memory space on then/else branches");
 
-    // TODO: Properly support with options, for now it is hardcoded MemRef type
-    // based approach Layout maps are different: Promote to fully dynamic layout
-    // map.
+    // Give the downstream policy a chance to merge the branch buffer types
+    // before falling back to the fully-dynamic layout.
+    auto reconciled = tryReconcileBufferType(
+        op, BufferizationOptions::BufferTypeMismatchKind::IfBranches,
+        thenBufferType, elseBufferType, options);
+    if (failed(reconciled))
+      return failure();
+    if (*reconciled)
+      return **reconciled;
+
+    // Layout maps are different: Promote to fully dynamic layout map.
     return cast<BufferLikeType>(getMemRefTypeWithFullyDynamicLayout(
         cast<TensorType>(opResult.getType()),
         thenBaseMemRefType.getMemorySpace()));
@@ -439,9 +469,20 @@ struct IndexSwitchOpInterface
       if (bufferType.getMemorySpace() != yieldedBufferType->getMemorySpace())
         return op->emitError("inconsistent memory space on switch cases");
 
-      // TODO: Properly support with options, for now it is hardcoded MemRef
-      // type based approach Layout maps are different: Promote to fully dynamic
-      // layout map.
+      // Give the downstream policy a chance to merge before falling back to
+      // the fully-dynamic layout.
+      auto reconciled = tryReconcileBufferType(
+          op, BufferizationOptions::BufferTypeMismatchKind::IndexSwitchCases,
+          cast<BufferLikeType>(bufferType),
+          cast<BufferLikeType>(*yieldedBufferType), options);
+      if (failed(reconciled))
+        return failure();
+      if (*reconciled) {
+        bufferType = cast<BaseMemRefType>(**reconciled);
+        continue;
+      }
+
+      // Layout maps are different: Promote to fully dynamic layout map.
       bufferType = getMemRefTypeWithFullyDynamicLayout(
           cast<TensorType>(value.getType()), bufferType.getMemorySpace());
     }
@@ -593,8 +634,16 @@ static FailureOr<BufferLikeType> computeLoopRegionIterArgBufferType(
         "expected same shape");
   }
 #endif // NDEBUG
-  // TODO: Properly support with options, for now it is hardcoded MemRef type
-  // based approach
+
+  // Give the downstream policy a chance to merge init/yield buffer types.
+  auto reconciled = tryReconcileBufferType(
+      loopOp, BufferizationOptions::BufferTypeMismatchKind::LoopIterArg,
+      *initArgBufferType, yieldedValueBufferType, options);
+  if (failed(reconciled))
+    return failure();
+  if (*reconciled)
+    return **reconciled;
+
   return cast<BufferLikeType>(getMemRefTypeWithFullyDynamicLayout(
       iterTensorType, yieldedBufferType.getMemorySpace()));
 }

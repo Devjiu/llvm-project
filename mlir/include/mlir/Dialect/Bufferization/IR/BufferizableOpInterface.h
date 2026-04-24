@@ -277,6 +277,28 @@ struct BufferizationOptions {
   /// not change rank / shape / element type of the result.
   using TensorEncodingToMemRefLayoutFn =
       std::function<MemRefLayoutAttrInterface(TensorType)>;
+
+  /// Kind of buffer-type mismatch that triggered a reconcile call. Allows the
+  /// downstream policy to specialise by context without adding new hooks.
+  enum class BufferTypeMismatchKind {
+    /// Init-arg vs. yielded-value buffer types in an `scf.for` / `scf.while`.
+    LoopIterArg,
+    /// Buffer types from the `then` and `else` branches of an `scf.if`.
+    IfBranches,
+    /// Buffer types from the `scf.index_switch` default/case regions.
+    IndexSwitchCases,
+  };
+
+  /// Resolve a mismatch between two buffer types that were independently
+  /// inferred for the same bufferized value. Called after memory-space
+  /// equality is checked; the hook may therefore assume compatible memory
+  /// spaces. Returning `failure()` makes the surrounding bufferization fail
+  /// (the default), returning a concrete `BufferLikeType` forces its use.
+  /// Returning `BufferLikeType{}` asks the caller to fall back to the
+  /// framework default (fully-dynamic layout).
+  using ReconcileBufferTypeMismatchFn = std::function<FailureOr<BufferLikeType>(
+      Operation *op, BufferTypeMismatchKind kind, BufferLikeType lhs,
+      BufferLikeType rhs, const BufferizationOptions &)>;
   // Produce a MemorySpace attribute from a tensor type
   using DefaultMemorySpaceFn =
       std::function<std::optional<Attribute>(TensorType t)>;
@@ -379,6 +401,13 @@ struct BufferizationOptions {
   /// Downstream callers can override the hook to provide custom mapping for
   /// dialect-specific encodings.
   TensorEncodingToMemRefLayoutFn tensorEncodingToMemRefLayoutFn = nullptr;
+
+  /// Optional hook to reconcile two buffer types that were independently
+  /// inferred for the same bufferized value (e.g. init_arg vs. yielded value
+  /// in `scf.for`, branches of `scf.if`, cases of `scf.index_switch`).
+  /// `nullptr` keeps the default behavior (promote to fully-dynamic layout
+  /// on layout mismatch, fail on memory-space mismatch).
+  ReconcileBufferTypeMismatchFn reconcileBufferTypeMismatchFn = nullptr;
 
   /// If set to `true`, the analysis is skipped. A buffer is copied before every
   /// write. This flag cannot be used together with `testAnalysisOnly = true`.
