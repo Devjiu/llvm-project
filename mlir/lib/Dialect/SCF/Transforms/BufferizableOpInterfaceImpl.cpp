@@ -43,6 +43,13 @@ static Value castBuffer(OpBuilder &b, Value buffer, Type type) {
   // TODO: In case `type` has a layout map that is not the fully dynamic
   // one, we may not be able to cast the buffer. In that case, the loop
   // iter_arg's layout map must be changed (see uses of `castBuffer`).
+  // TODO: memref::CastOp::areCastCompatible only knows about the built-in
+  // strided layout. When a custom `BufferLikeType` (or a non-strided layout
+  // attribute, e.g. produced via `tensorEncodingToMemRefLayoutFn` +
+  // `reconcileBufferTypeMismatchFn`) is used, this assertion can spuriously
+  // fail even though the downstream dialect would accept the cast. Teach
+  // `castBuffer` to consult a pluggable "cast compatible" hook from
+  // `BufferizationOptions` so downstream buffer types can participate.
   assert(memref::CastOp::areCastCompatible(buffer.getType(), type) &&
          "scf.while op bufferization: cast incompatible");
   return memref::CastOp::create(b, buffer.getLoc(), type, buffer).getResult();
@@ -323,9 +330,17 @@ struct IfOpInterface
             elseBaseMemRefType.getMemorySpace())
       return op->emitError("inconsistent memory space on then/else branches");
 
-    // TODO: Properly support with options, for now it is hardcoded MemRef type
-    // based approach Layout maps are different: Promote to fully dynamic layout
-    // map.
+    // Give the downstream policy a chance to merge the branch buffer types
+    // before falling back to the fully-dynamic layout.
+    auto reconciled = options.reconcileBufferTypeMismatchFn(
+        op, BufferizationOptions::BufferTypeMismatchKind::IfBranches,
+        thenBufferType, elseBufferType, options);
+    if (failed(reconciled))
+      return failure();
+    if (*reconciled)
+      return *reconciled;
+
+    // Layout maps are different: Promote to fully dynamic layout map.
     return cast<BufferLikeType>(getMemRefTypeWithFullyDynamicLayout(
         cast<TensorType>(opResult.getType()),
         thenBaseMemRefType.getMemorySpace()));
@@ -439,9 +454,20 @@ struct IndexSwitchOpInterface
       if (bufferType.getMemorySpace() != yieldedBufferType->getMemorySpace())
         return op->emitError("inconsistent memory space on switch cases");
 
-      // TODO: Properly support with options, for now it is hardcoded MemRef
-      // type based approach Layout maps are different: Promote to fully dynamic
-      // layout map.
+      // Give the downstream policy a chance to merge before falling back to
+      // the fully-dynamic layout.
+      auto reconciled = options.reconcileBufferTypeMismatchFn(
+          op, BufferizationOptions::BufferTypeMismatchKind::IndexSwitchCases,
+          cast<BufferLikeType>(bufferType),
+          cast<BufferLikeType>(*yieldedBufferType), options);
+      if (failed(reconciled))
+        return failure();
+      if (*reconciled) {
+        bufferType = cast<BaseMemRefType>(*reconciled);
+        continue;
+      }
+
+      // Layout maps are different: Promote to fully dynamic layout map.
       bufferType = getMemRefTypeWithFullyDynamicLayout(
           cast<TensorType>(value.getType()), bufferType.getMemorySpace());
     }
@@ -575,6 +601,15 @@ static FailureOr<BufferLikeType> computeLoopRegionIterArgBufferType(
   if (*initArgBufferType == yieldedValueBufferType)
     return yieldedValueBufferType;
 
+  // Give the downstream policy a chance to merge init/yield buffer types.
+  auto reconciled = options.reconcileBufferTypeMismatchFn(
+      loopOp, BufferizationOptions::BufferTypeMismatchKind::LoopIterArg,
+      *initArgBufferType, yieldedValueBufferType, options);
+  if (failed(reconciled))
+    return failure();
+  if (*reconciled)
+    return *reconciled;
+
   // If there is a mismatch between the yielded buffer type and the init_arg
   // buffer type, the buffer type must be promoted to a fully dynamic layout
   // map.
@@ -593,8 +628,7 @@ static FailureOr<BufferLikeType> computeLoopRegionIterArgBufferType(
         "expected same shape");
   }
 #endif // NDEBUG
-  // TODO: Properly support with options, for now it is hardcoded MemRef type
-  // based approach
+
   return cast<BufferLikeType>(getMemRefTypeWithFullyDynamicLayout(
       iterTensorType, yieldedBufferType.getMemorySpace()));
 }

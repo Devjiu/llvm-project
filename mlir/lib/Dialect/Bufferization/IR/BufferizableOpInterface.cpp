@@ -351,10 +351,9 @@ BufferLikeType
 defaultFunctionArgTypeConverter(TensorLikeType type, Attribute memorySpace,
                                 func::FuncOp funcOp,
                                 const BufferizationOptions &options) {
-  if (auto tensorType = mlir::dyn_cast<TensorType>(type)) {
+  if (auto tensorType = mlir::dyn_cast<TensorType>(type))
     return cast<BufferLikeType>(
         getMemRefTypeWithFullyDynamicLayout(tensorType, memorySpace));
-  }
 
   // If not builtin, fallback to TensorLikeType::getBufferType()
   auto bufferType =
@@ -370,12 +369,34 @@ defaultUnknownTypeConverter(TensorType tensorType, Attribute memorySpace,
   return getMemRefTypeWithFullyDynamicLayout(tensorType, memorySpace);
 }
 
+/// Default tensor-encoding to memref-layout hook: if the tensor is a
+/// `RankedTensorType` whose encoding already implements
+/// `MemRefLayoutAttrInterface`, use it directly. Downstream callers can
+/// override the hook on `BufferizationOptions` to customize this mapping.
+MemRefLayoutAttrInterface defaultTensorEncodingToMemRefLayout(TensorType t) {
+  auto rtt = dyn_cast<RankedTensorType>(t);
+  if (!rtt)
+    return {};
+  return dyn_cast_or_null<MemRefLayoutAttrInterface>(rtt.getEncoding());
+}
+
+/// Default reconcile hook: ask the caller for the framework fallback by
+/// returning a null `BufferLikeType`. Downstream callers override this on
+/// `BufferizationOptions` to keep custom layouts through SCF merge points.
+FailureOr<BufferLikeType> defaultReconcileBufferTypeMismatch(
+    Operation *, BufferizationOptions::BufferTypeMismatchKind, BufferLikeType,
+    BufferLikeType, const BufferizationOptions &) {
+  return BufferLikeType{};
+}
+
 } // namespace
 
 // Default constructor for BufferizationOptions.
 BufferizationOptions::BufferizationOptions()
     : functionArgTypeConverterFn(defaultFunctionArgTypeConverter),
-      unknownTypeConverterFn(defaultUnknownTypeConverter) {}
+      unknownTypeConverterFn(defaultUnknownTypeConverter),
+      tensorEncodingToMemRefLayoutFn(defaultTensorEncodingToMemRefLayout),
+      reconcileBufferTypeMismatchFn(defaultReconcileBufferTypeMismatch) {}
 
 bool BufferizationOptions::isOpAllowed(Operation *op) const {
   // Special case: If function boundary bufferization is deactivated, do not

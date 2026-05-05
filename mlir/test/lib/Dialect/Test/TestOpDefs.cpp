@@ -1842,6 +1842,47 @@ test::TestCreateTensorOp::getBufferType(
   return convertTensorToBuffer(getOperation(), options, type);
 }
 
+::mlir::LogicalResult test::TestTensorWithLayoutOp::bufferize(
+    ::mlir::RewriterBase &rewriter,
+    const ::mlir::bufferization::BufferizationOptions &options,
+    ::mlir::bufferization::BufferizationState &state) {
+  // Note: mlir::bufferization::getBufferType() will internally call
+  // TestTensorWithLayoutOp::getBufferType() and pick up the per-op layout
+  // attribute.
+  const auto bufferizedOutType =
+      mlir::bufferization::getBufferType(getOutput(), options, state);
+  if (mlir::failed(bufferizedOutType))
+    return failure();
+
+  // Replace with the `test.create_memref_op` placeholder so the IR remains
+  // well-formed after bufferization. The exact producer op does not matter
+  // here -- only the result memref type does.
+  auto createMemrefOp = test::TestCreateMemrefOp::create(
+      rewriter, getLoc(), *bufferizedOutType);
+  mlir::bufferization::replaceOpWithBufferizedValues(
+      rewriter, getOperation(), createMemrefOp.getResult());
+  return mlir::success();
+}
+
+mlir::FailureOr<mlir::bufferization::BufferLikeType>
+test::TestTensorWithLayoutOp::getBufferType(
+    mlir::Value value, const mlir::bufferization::BufferizationOptions &,
+    const mlir::bufferization::BufferizationState &,
+    llvm::SmallVector<::mlir::Value> &) {
+  auto tensorType = dyn_cast<RankedTensorType>(value.getType());
+  if (!tensorType)
+    return failure();
+  // Pick the memref layout from the op's `layout` string attribute, ignoring
+  // any tensor encoding. This is what lets two `test.tensor_with_layout` ops
+  // produce *bufferized* memrefs with different layouts while keeping their
+  // *tensor* result types identical -- which is required to construct SCF
+  // iter_arg/branch mismatches that the verifier still accepts.
+  auto layout = cast<MemRefLayoutAttrInterface>(test::TestMemRefLayoutAttr::get(
+      getContext(), StringAttr::get(getContext(), getLayout())));
+  return cast<bufferization::BufferLikeType>(MemRefType::get(
+      tensorType.getShape(), tensorType.getElementType(), layout));
+}
+
 // Define a custom builder for ManyRegionsOp declared in TestOps.td.
 //  OpBuilder<(ins "::std::unique_ptr<::mlir::Region>":$firstRegion,
 //                 "::std::unique_ptr<::mlir::Region>":$secondRegion)>
