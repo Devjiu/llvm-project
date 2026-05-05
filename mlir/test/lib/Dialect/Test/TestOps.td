@@ -4035,6 +4035,50 @@ def TestCreateMemrefOp : TEST_Op<"create_memref_op"> {
   let results = (outs Arg<Bufferization_BufferLikeTypeInterface>:$output);
 }
 
+// A 0-operand tensor producer whose bufferized memref carries a
+// `TestMemRefLayoutAttr` chosen from the `layout` string attribute. Unlike
+// `TestCreateTensorOp` -- which derives the memref layout from the tensor
+// encoding -- this op keeps the tensor type plain (no encoding) and only
+// surfaces the layout in `getBufferType`. That is the only way to construct
+// SCF iter_arg/branch buffer-type mismatches without violating the SCF
+// verifier (which requires init/iter/yield tensor types to be identical).
+def TestTensorWithLayoutOp
+    : TEST_Op<"tensor_with_layout",
+              [DeclareOpInterfaceMethods<
+                  BufferizableOpInterface,
+                  ["bufferize", "getBufferType", "bufferizesToMemoryRead",
+                   "bufferizesToMemoryWrite", "getAliasingValues",
+                   "getAliasingOpOperands", "bufferizesToAllocation"]>]> {
+  let arguments = (ins StrAttr:$layout);
+  let results = (outs AnyRankedTensor:$output);
+  let assemblyFormat = "attr-dict `:` type($output)";
+  let extraClassDefinition = [{
+    bool test::TestTensorWithLayoutOp::bufferizesToMemoryRead(
+        ::mlir::OpOperand&,
+        const ::mlir::bufferization::AnalysisState&) {
+      return false;
+    }
+    bool test::TestTensorWithLayoutOp::bufferizesToMemoryWrite(
+        ::mlir::OpOperand&,
+        const ::mlir::bufferization::AnalysisState&) {
+      return false;
+    }
+    bool test::TestTensorWithLayoutOp::bufferizesToAllocation(mlir::Value) {
+      return true;
+    }
+    ::mlir::bufferization::AliasingValueList
+    test::TestTensorWithLayoutOp::getAliasingValues(::mlir::OpOperand&,
+        const ::mlir::bufferization::AnalysisState&) {
+      return {};
+    }
+    ::mlir::bufferization::AliasingOpOperandList
+    test::TestTensorWithLayoutOp::getAliasingOpOperands(::mlir::Value,
+        const ::mlir::bufferization::AnalysisState&) {
+      return {};
+    }
+  }];
+}
+
 //===----------------------------------------------------------------------===//
 // Test assembly format references
 //===----------------------------------------------------------------------===//

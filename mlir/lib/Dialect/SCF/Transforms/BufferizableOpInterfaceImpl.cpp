@@ -29,28 +29,6 @@ namespace mlir {
 namespace scf {
 namespace {
 
-/// Dispatch to `options.reconcileBufferTypeMismatchFn` when set. Returns:
-///   * the hook's result when it succeeds with a concrete buffer type,
-///   * `failure()` when the hook explicitly fails,
-///   * `std::nullopt` when there is no hook or the hook asked for the default
-///     fallback (i.e. returned a null `BufferLikeType`).
-/// On `std::nullopt` the caller is expected to apply its existing fallback
-/// (typically fully-dynamic layout).
-static FailureOr<std::optional<BufferLikeType>> tryReconcileBufferType(
-    Operation *op, BufferizationOptions::BufferTypeMismatchKind kind,
-    BufferLikeType lhs, BufferLikeType rhs,
-    const BufferizationOptions &options) {
-  if (!options.reconcileBufferTypeMismatchFn)
-    return std::optional<BufferLikeType>{std::nullopt};
-  auto result = options.reconcileBufferTypeMismatchFn(op, kind, lhs, rhs,
-                                                      options);
-  if (failed(result))
-    return failure();
-  if (!*result)
-    return std::optional<BufferLikeType>{std::nullopt};
-  return std::optional<BufferLikeType>{*result};
-}
-
 /// Helper function for loop bufferization. Cast the given buffer to the given
 /// memref type.
 static Value castBuffer(OpBuilder &b, Value buffer, Type type) {
@@ -354,13 +332,13 @@ struct IfOpInterface
 
     // Give the downstream policy a chance to merge the branch buffer types
     // before falling back to the fully-dynamic layout.
-    auto reconciled = tryReconcileBufferType(
+    auto reconciled = options.reconcileBufferTypeMismatchFn(
         op, BufferizationOptions::BufferTypeMismatchKind::IfBranches,
         thenBufferType, elseBufferType, options);
     if (failed(reconciled))
       return failure();
     if (*reconciled)
-      return **reconciled;
+      return *reconciled;
 
     // Layout maps are different: Promote to fully dynamic layout map.
     return cast<BufferLikeType>(getMemRefTypeWithFullyDynamicLayout(
@@ -478,14 +456,14 @@ struct IndexSwitchOpInterface
 
       // Give the downstream policy a chance to merge before falling back to
       // the fully-dynamic layout.
-      auto reconciled = tryReconcileBufferType(
+      auto reconciled = options.reconcileBufferTypeMismatchFn(
           op, BufferizationOptions::BufferTypeMismatchKind::IndexSwitchCases,
           cast<BufferLikeType>(bufferType),
           cast<BufferLikeType>(*yieldedBufferType), options);
       if (failed(reconciled))
         return failure();
       if (*reconciled) {
-        bufferType = cast<BaseMemRefType>(**reconciled);
+        bufferType = cast<BaseMemRefType>(*reconciled);
         continue;
       }
 
@@ -623,6 +601,15 @@ static FailureOr<BufferLikeType> computeLoopRegionIterArgBufferType(
   if (*initArgBufferType == yieldedValueBufferType)
     return yieldedValueBufferType;
 
+  // Give the downstream policy a chance to merge init/yield buffer types.
+  auto reconciled = options.reconcileBufferTypeMismatchFn(
+      loopOp, BufferizationOptions::BufferTypeMismatchKind::LoopIterArg,
+      *initArgBufferType, yieldedValueBufferType, options);
+  if (failed(reconciled))
+    return failure();
+  if (*reconciled)
+    return *reconciled;
+
   // If there is a mismatch between the yielded buffer type and the init_arg
   // buffer type, the buffer type must be promoted to a fully dynamic layout
   // map.
@@ -641,15 +628,6 @@ static FailureOr<BufferLikeType> computeLoopRegionIterArgBufferType(
         "expected same shape");
   }
 #endif // NDEBUG
-
-  // Give the downstream policy a chance to merge init/yield buffer types.
-  auto reconciled = tryReconcileBufferType(
-      loopOp, BufferizationOptions::BufferTypeMismatchKind::LoopIterArg,
-      *initArgBufferType, yieldedValueBufferType, options);
-  if (failed(reconciled))
-    return failure();
-  if (*reconciled)
-    return **reconciled;
 
   return cast<BufferLikeType>(getMemRefTypeWithFullyDynamicLayout(
       iterTensorType, yieldedBufferType.getMemorySpace()));

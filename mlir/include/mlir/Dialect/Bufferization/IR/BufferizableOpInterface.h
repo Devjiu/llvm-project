@@ -270,11 +270,11 @@ struct BufferizationOptions {
   using UnknownTypeConverterFn = std::function<BaseMemRefType(
       TensorType, Attribute memorySpace, const BufferizationOptions &)>;
   /// Build a MemRefLayoutAttrInterface from the encoding of `tensorType`.
-  /// Called whenever bufferization materializes a memref for a tensor value
-  /// (function arguments, `bufferization.alloc_tensor`, generic tensor-like
-  /// conversion fallback). Returning `nullptr` keeps the default layout
-  /// (identity or fully-dynamic, depending on the call site). The hook must
-  /// not change rank / shape / element type of the result.
+  /// Consulted by the built-in tensor-to-memref conversion paths that are
+  /// driven by the tensor value itself: `BuiltinTensorExternalModel`'s
+  /// `getBufferType` and `bufferization.alloc_tensor`. Returning `nullptr`
+  /// keeps the default (static identity) layout. The hook must not change
+  /// rank / shape / element type of the result.
   using TensorEncodingToMemRefLayoutFn =
       std::function<MemRefLayoutAttrInterface(TensorType)>;
 
@@ -404,9 +404,9 @@ struct BufferizationOptions {
 
   /// Optional hook to reconcile two buffer types that were independently
   /// inferred for the same bufferized value (e.g. init_arg vs. yielded value
-  /// in `scf.for`, branches of `scf.if`, cases of `scf.index_switch`).
-  /// `nullptr` keeps the default behavior (promote to fully-dynamic layout
-  /// on layout mismatch, fail on memory-space mismatch).
+  /// in `scf.for`, branches of `scf.if`, cases of `scf.index_switch`). The
+  /// default keeps the framework behavior (promote to fully-dynamic layout on
+  /// layout mismatch, fail on memory-space mismatch).
   ReconcileBufferTypeMismatchFn reconcileBufferTypeMismatchFn = nullptr;
 
   /// If set to `true`, the analysis is skipped. A buffer is copied before every

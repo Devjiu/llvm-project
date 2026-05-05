@@ -346,22 +346,14 @@ bool OpFilter::isOpAllowed(Operation *op) const {
 
 namespace {
 
-/// Default function arg type converter: Use a fully dynamic layout map, or
-/// the layout produced by `tensorEncodingToMemRefLayoutFn` when the hook is
-/// set and returns a non-null layout.
+/// Default function arg type converter: Use a fully dynamic layout map.
 BufferLikeType
 defaultFunctionArgTypeConverter(TensorLikeType type, Attribute memorySpace,
                                 func::FuncOp funcOp,
                                 const BufferizationOptions &options) {
-  if (auto tensorType = mlir::dyn_cast<TensorType>(type)) {
-    if (options.tensorEncodingToMemRefLayoutFn) {
-      if (auto layout = options.tensorEncodingToMemRefLayoutFn(tensorType))
-        return cast<BufferLikeType>(
-            getMemRefType(tensorType, options, layout, memorySpace));
-    }
+  if (auto tensorType = mlir::dyn_cast<TensorType>(type))
     return cast<BufferLikeType>(
         getMemRefTypeWithFullyDynamicLayout(tensorType, memorySpace));
-  }
 
   // If not builtin, fallback to TensorLikeType::getBufferType()
   auto bufferType =
@@ -370,17 +362,10 @@ defaultFunctionArgTypeConverter(TensorLikeType type, Attribute memorySpace,
          "a valid buffer is always expected at function boundary");
   return *bufferType;
 }
-/// Default unknown type converter: Use a fully dynamic layout map, or the
-/// layout produced by `tensorEncodingToMemRefLayoutFn` when the hook is set
-/// and returns a non-null layout.
+/// Default unknown type converter: Use a fully dynamic layout map.
 BaseMemRefType
 defaultUnknownTypeConverter(TensorType tensorType, Attribute memorySpace,
                             const BufferizationOptions &options) {
-  if (options.tensorEncodingToMemRefLayoutFn) {
-    if (auto layout = options.tensorEncodingToMemRefLayoutFn(tensorType))
-      return cast<BaseMemRefType>(
-          getMemRefType(tensorType, options, layout, memorySpace));
-  }
   return getMemRefTypeWithFullyDynamicLayout(tensorType, memorySpace);
 }
 
@@ -395,13 +380,23 @@ MemRefLayoutAttrInterface defaultTensorEncodingToMemRefLayout(TensorType t) {
   return dyn_cast_or_null<MemRefLayoutAttrInterface>(rtt.getEncoding());
 }
 
+/// Default reconcile hook: ask the caller for the framework fallback by
+/// returning a null `BufferLikeType`. Downstream callers override this on
+/// `BufferizationOptions` to keep custom layouts through SCF merge points.
+FailureOr<BufferLikeType> defaultReconcileBufferTypeMismatch(
+    Operation *, BufferizationOptions::BufferTypeMismatchKind, BufferLikeType,
+    BufferLikeType, const BufferizationOptions &) {
+  return BufferLikeType{};
+}
+
 } // namespace
 
 // Default constructor for BufferizationOptions.
 BufferizationOptions::BufferizationOptions()
     : functionArgTypeConverterFn(defaultFunctionArgTypeConverter),
       unknownTypeConverterFn(defaultUnknownTypeConverter),
-      tensorEncodingToMemRefLayoutFn(defaultTensorEncodingToMemRefLayout) {}
+      tensorEncodingToMemRefLayoutFn(defaultTensorEncodingToMemRefLayout),
+      reconcileBufferTypeMismatchFn(defaultReconcileBufferTypeMismatch) {}
 
 bool BufferizationOptions::isOpAllowed(Operation *op) const {
   // Special case: If function boundary bufferization is deactivated, do not
@@ -434,12 +429,6 @@ void BufferizationOptions::setFunctionBoundaryTypeConversion(
                                    func::FuncOp funcOp,
                                    const BufferizationOptions &options) {
     if (auto tensorType = mlir::dyn_cast<TensorType>(type)) {
-      if (options.tensorEncodingToMemRefLayoutFn) {
-        if (auto layout = options.tensorEncodingToMemRefLayoutFn(tensorType))
-          return cast<BufferLikeType>(
-              bufferization::getMemRefType(tensorType, options, layout,
-                                           memorySpace));
-      }
       if (layoutMapOption == LayoutMapOption::IdentityLayoutMap)
         return cast<BufferLikeType>(
             bufferization::getMemRefTypeWithStaticIdentityLayout(tensorType,
